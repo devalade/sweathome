@@ -1,0 +1,201 @@
+#!/bin/bash
+
+# =================================================================
+#        Advanced Ubuntu Server Security Hardening Script
+# =================================================================
+#
+# This script builds upon basic hardening and applies advanced
+# security measures to a fresh Ubuntu system.
+#
+# WHAT IT DOES:
+# 1.  Performs all actions from the basic script (update, create user,
+#     disable root SSH, basic UFW, Fail2ban).
+# 2.  Prompts to change the default SSH port.
+# 3.  Applies kernel hardening settings via sysctl to mitigate
+#     common network attacks.
+# 4.  Installs and configures UFW rate-limiting on the SSH port.
+# 5.  Installs and enables 'unattended-upgrades' for automatic
+#     security patching.
+# 6.  Installs 'AIDE' (Advanced Intrusion Detection Environment) for
+#     file integrity monitoring.
+#
+# USAGE:
+# 1.  Run the initial hardening script first, or ensure you have a
+#     non-root sudo user and SSH key access.
+# 2.  Download this script: wget [URL] -O advanced_harden.sh
+# 3.  Make it executable: chmod +x advanced_harden.sh
+# 4.  Run with sudo: sudo ./advanced_harden.sh
+#
+# =================================================================
+
+# --- Script Functions ---
+
+# Function to print a section header
+print_header() {
+    echo ""
+    echo "============================================================"
+    echo "  $1"
+    echo "============================================================"
+}
+
+# --- Main Script ---
+
+# 1. Check if the script is run as root
+if [[ "${EUID}" -ne 0 ]]; then
+    echo "Error: This script must be run as root."
+    echo "Please run with 'sudo'."
+    exit 1
+fi
+
+# Run initial setup from the first script. For brevity, these are condensed.
+# In a real-world scenario, you might run the first script, then this one.
+# For this all-in-one advanced script, we include the basics.
+
+# --- Step 1: System Update ---
+print_header "Updating System Packages"
+apt-get update && apt-get upgrade -y
+apt-get autoremove -y && apt-get autoclean -y
+echo "System update complete."
+
+# --- Step 2: Ensure Sudo User Exists ---
+print_header "Ensuring a Sudo User Exists"
+read -p "Enter the username of your primary sudo user: " SUDO_USER
+if ! id "$SUDO_USER" &>/dev/null; then
+    echo "User '$SUDO_USER' does not exist. Please create one first."
+    exit 1
+fi
+echo "Continuing with user '$SUDO_USER'."
+
+# --- Step 3: Advanced SSH Hardening ---
+print_header "Advanced SSH Hardening"
+SSH_PORT=22 # Default SSH Port
+read -p "Do you want to change the default SSH port (22)? [y/N]: " CHANGE_PORT
+if [[ "$CHANGE_PORT" =~ ^[yY](es)?$ ]]; then
+    read -p "Enter a new SSH port number (1025-65535): " NEW_SSH_PORT
+    # Basic validation for the port number
+    if ! [[ "$NEW_SSH_PORT" =~ ^[0-9]+$ ]] || [ "$NEW_SSH_PORT" -lt 1025 ] || [ "$NEW_SSH_PORT" -gt 65535 ]; then
+        echo "Invalid port number. Using default port 22."
+    else
+        SSH_PORT=$NEW_SSH_PORT
+        # Create a backup
+        cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak_portchange
+        # Change the port
+        sed -i "s/^#?Port 22/Port $SSH_PORT/" /etc/ssh/sshd_config
+        echo "SSH port changed to $SSH_PORT."
+    fi
+fi
+# Ensure root login and password auth are disabled
+sed -i 's/^#?PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
+sed -i 's/^#?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+# Add an AllowUsers line to be more explicit
+sed -i '/^AllowUsers/d' /etc/ssh/sshd_config # Remove existing AllowUsers line
+echo "AllowUsers $SUDO_USER" >> /etc/ssh/sshd_config
+echo "SSH access is now restricted to user '$SUDO_USER'."
+
+# --- Step 4: Kernel Hardening (sysctl) ---
+print_header "Applying Kernel Hardening Settings"
+SYSCTL_CONF="/etc/sysctl.d/99-hardening.conf"
+cat > "$SYSCTL_CONF" << EOL
+# IP Spoofing protection
+net.ipv4.conf.default.rp_filter=1
+net.ipv4.conf.all.rp_filter=1
+
+# Ignore ICMP broadcast requests
+net.ipv4.icmp_echo_ignore_broadcasts=1
+
+# Disable source-routed packets
+net.ipv4.conf.all.accept_source_route=0
+net.ipv6.conf.all.accept_source_route=0
+
+# Ignore send redirects
+net.ipv4.conf.all.send_redirects=0
+net.ipv4.conf.default.send_redirects=0
+
+# Block SYN attacks
+net.ipv4.tcp_syncookies=1
+net.ipv4.tcp_max_syn_backlog=2048
+net.ipv4.tcp_synack_retries=2
+net.ipv4.tcp_syn_retries=5
+
+# Log martian packets
+net.ipv4.conf.all.log_martians=1
+
+# Ignore bogus ICMP error responses
+net.ipv4.icmp_ignore_bogus_error_responses=1
+
+# Disable ICMP redirect acceptance
+net.ipv4.conf.all.accept_redirects=0
+net.ipv6.conf.all.accept_redirects=0
+net.ipv4.conf.default.accept_redirects=0
+net.ipv6.conf.default.accept_redirects=0
+EOL
+# Apply the new settings
+sysctl --system
+echo "Kernel hardening parameters applied."
+
+# --- Step 5: Configure Firewall (UFW) with Rate Limiting ---
+print_header "Configuring UFW with Rate Limiting"
+apt-get install ufw -y
+ufw --force reset
+ufw default deny incoming
+ufw default allow outgoing
+ufw allow $SSH_PORT/tcp # Allow the potentially new SSH port
+ufw limit $SSH_PORT/tcp # Apply rate limiting to the SSH port
+ufw allow http
+ufw allow https
+ufw --force enable
+echo "Firewall configured with rate limiting on SSH port $SSH_PORT."
+ufw status verbose
+
+# --- Step 6: Install and Configure Fail2ban ---
+print_header "Installing Fail2ban"
+apt-get install fail2ban -y
+JAIL_LOCAL="/etc/fail2ban/jail.local"
+if [ ! -f "$JAIL_LOCAL" ]; then
+    echo "Creating Fail2ban local configuration..."
+    cat > "$JAIL_LOCAL" << EOL
+[DEFAULT]
+bantime = 1h
+findtime = 10m
+maxretry = 5
+
+[sshd]
+enabled = true
+port = $SSH_PORT
+EOL
+fi
+systemctl restart fail2ban
+systemctl enable fail2ban
+echo "Fail2ban configured for SSH on port $SSH_PORT."
+
+# --- Step 7: Automated Security Updates ---
+print_header "Setting Up Automated Security Updates"
+apt-get install unattended-upgrades -y
+dpkg-reconfigure -plow unattended-upgrades
+echo "Unattended-upgrades configured for automatic security patches."
+
+# --- Step 8: File Integrity Monitoring (AIDE) ---
+print_header "Installing AIDE (File Integrity Monitor)"
+apt-get install aide -y
+echo "Initializing AIDE database. This will take several minutes..."
+aideinit
+# The new database must be moved to be the active one
+mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db
+echo "AIDE has been installed and initialized."
+echo "Run 'sudo aide --check' periodically to check for file changes."
+
+# --- Final Message ---
+print_header "Advanced Server Hardening Complete!"
+echo "✓ SSH port set to $SSH_PORT and access limited to '$SUDO_USER'."
+echo "✓ Kernel parameters hardened against network attacks."
+echo "✓ UFW firewall includes rate-limiting on the SSH port."
+echo "✓ Fail2ban is configured for the new SSH port."
+echo "✓ Unattended-upgrades will automatically install security patches."
+echo "✓ AIDE is installed for file integrity monitoring."
+echo ""
+echo "IMPORTANT:"
+echo "1. Restart the SSH service to apply all changes: sudo systemctl restart sshd"
+echo "2. Remember to connect using the new port: ssh -p $SSH_PORT ${SUDO_USER}@[your_server_ip]"
+echo "3. Schedule a cron job to run 'aide --check' and email you the results."
+
+exit 0

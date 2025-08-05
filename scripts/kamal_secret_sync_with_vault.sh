@@ -241,6 +241,7 @@ update_kamal_secrets_file() {
 		echo "SECRETS=\$(kamal secrets fetch --adapter bitwarden-sm ${project_id}/all)"
 		echo
 		echo "# Extract each secret from the fetched block"
+		echo "KAMAL_REGISTRY_PASSWORD=\$(kamal secrets extract KAMAL_REGISTRY_PASSWORD \$SECRETS)"
 	} >>"$tmp_file"
 
 	# Loop through the required keys and add an extract command for each
@@ -249,7 +250,7 @@ update_kamal_secrets_file() {
 	for key in "${keys_array[@]}"; do
 		key=$(echo "$key" | xargs)
 		if [ -n "$key" ]; then
-			echo "${key}=\$(kamal secrets extract ${key} \"\$SECRETS\")" >>"$tmp_file"
+			echo "${key}=\$(kamal secrets extract ${key} \$SECRETS)" >>"$tmp_file"
 		fi
 	done
 
