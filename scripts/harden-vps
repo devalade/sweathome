@@ -1,49 +1,39 @@
 #!/bin/bash
 
 # =================================================================
-#          Ubuntu Server Initial Security Hardening Script
+#           Ubuntu Server Initial Security Hardening Script
 # =================================================================
-#
-# This script performs initial security hardening tasks on a fresh
-# Ubuntu system.
 #
 # WHAT IT DOES:
 # 1. Updates all system packages.
-# 2. Prompts to create a new user with sudo privileges.
-# 3. Disables root SSH login to enhance security.
-# 4. Configures UFW (Uncomplicated Firewall) to allow only SSH,
-#    HTTP, and HTTPS traffic.
-# 5. Installs and configures Fail2ban to protect against brute-force
-#    attacks on the SSH service.
-#
-# USAGE:
-# 1. Download this script to your server:
-#    wget [URL_to_this_script] -O harden.sh
-# 2. Make it executable:
-#    chmod +x harden.sh
-# 3. Run it with sudo:
-#    sudo ./harden.sh
+# 2. Prompts to create a new primary user with sudo privileges.
+# 3. Creates a default 'deploy' user for application management.
+# 4. Grants Docker access to both the primary and 'deploy' users.
+# 5. Prompts to change the default SSH port.
+# 6. Disables root SSH login and password authentication.
+# 7. Configures UFW (Uncomplicated Firewall).
+# 8. Installs and configures Fail2ban for brute-force protection.
 #
 # =================================================================
 
 # --- Script Functions ---
 
-# Function to print a section header
 print_header() {
-    echo ""
-    echo "============================================================"
-    echo "  $1"
-    echo "============================================================"
+	echo ""
+	echo "============================================================"
+	echo "  $1"
+	echo "============================================================"
 }
 
 # --- Main Script ---
 
-# 1. Check if the script is run as root
 if [[ "${EUID}" -ne 0 ]]; then
-    echo "Error: This script must be run as root."
-    echo "Please run with 'sudo'."
-    exit 1
+	echo "Error: This script must be run as root."
+	echo "Please run with 'sudo'."
+	exit 1
 fi
+
+SSH_PORT=22
 
 # --- Step 1: System Update ---
 print_header "Updating System Packages"
@@ -54,82 +44,94 @@ apt-get autoclean -y
 echo "System update complete."
 
 # --- Step 2: Create a New Sudo User ---
-print_header "Creating a New User with Sudo Privileges"
-read -p "Enter the username for the new user: " NEW_USER
+print_header "Creating a New Sudo User"
+read -p "Enter the username for the new primary sudo user: " NEW_USER
 if [ -z "$NEW_USER" ]; then
-    echo "No username entered. Aborting."
-    exit 1
+	echo "No username entered. Aborting."
+	exit 1
 fi
 
 if id "$NEW_USER" &>/dev/null; then
-    echo "User '$NEW_USER' already exists. Skipping user creation."
+	echo "User '$NEW_USER' already exists. Skipping user creation."
 else
-    # Create the user
-    useradd -m -s /bin/bash "$NEW_USER"
-    echo "User '$NEW_USER' created."
-
-    # Set the password for the new user
-    echo "Please set a password for $NEW_USER."
-    passwd "$NEW_USER"
-
-    # Add the user to the sudo group
-    usermod -aG sudo "$NEW_USER"
-    echo "User '$NEW_USER' has been granted sudo privileges."
-    echo "IMPORTANT: Please log out and log back in as '$NEW_USER' to continue."
-    echo "           You will need to use SSH keys for the new user."
+	useradd -m -s /bin/bash "$NEW_USER"
+	echo "User '$NEW_USER' created."
+	echo "Please set a password for $NEW_USER."
+	passwd "$NEW_USER"
+	usermod -aG sudo "$NEW_USER"
+	echo "✅ User '$NEW_USER' has been granted sudo privileges."
 fi
 
-# --- Step 3: Secure SSH ---
+# --- Step 3: Create Deploy User & Configure Docker Access ---
+print_header "Creating 'deploy' User & Configuring Docker Access"
+DEPLOY_USER="deploy"
+
+if id "$DEPLOY_USER" &>/dev/null; then
+	echo "User '$DEPLOY_USER' already exists. Skipping creation."
+else
+	# Create the user with a home directory and shell, but no password for security
+	useradd -m -s /bin/bash --disabled-password "$DEPLOY_USER"
+	echo "✅ Default user '$DEPLOY_USER' created for deployments."
+	echo "   NOTE: This user has no password and requires SSH key authentication."
+fi
+
+# Create docker group if it doesn't exist and add users
+if ! getent group docker >/dev/null; then
+	echo "Docker group not found. Creating it now."
+	groupadd docker
+	echo "✅ Docker group created."
+fi
+
+echo "Adding users '$NEW_USER' and '$DEPLOY_USER' to the docker group..."
+usermod -aG docker "$NEW_USER"
+usermod -aG docker "$DEPLOY_USER"
+echo "✅ Users have been granted Docker privileges."
+
+# --- Step 4: Secure SSH ---
 print_header "Securing SSH Configuration"
-echo "Disabling root login and password authentication."
-# Create a backup of the original sshd_config file
+read -p "Enter a new SSH port (1-65535) or press Enter to keep default port 22: " NEW_SSH_PORT
+if [[ ! -z "$NEW_SSH_PORT" ]]; then
+	if ! [[ "$NEW_SSH_PORT" =~ ^[0-9]+$ ]] || ((NEW_SSH_PORT < 1 || NEW_SSH_PORT > 65535)); then
+		echo "Invalid port number. Using default port 22."
+	else
+		SSH_PORT=$NEW_SSH_PORT
+		echo "✅ SSH port will be changed to $SSH_PORT."
+	fi
+fi
+
+echo "Disabling root login and password authentication..."
 cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak
+grep -q -E "^#?Port" /etc/ssh/sshd_config && sed -i -E "s/^#?Port.*/Port ${SSH_PORT}/" /etc/ssh/sshd_config || echo "Port ${SSH_PORT}" >>/etc/ssh/sshd_config
+grep -q "^PermitRootLogin" /etc/ssh/sshd_config && sed -i 's/^PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config || echo "PermitRootLogin no" >>/etc/ssh/sshd_config
+grep -q "^PasswordAuthentication" /etc/ssh/sshd_config && sed -i 's/^PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config || echo "PasswordAuthentication no" >>/etc/ssh/sshd_config
 
-# Disable root login
-sed -i 's/PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config
-# A more robust way to ensure the line is set correctly
-grep -q "^PermitRootLogin" /etc/ssh/sshd_config && sed -i 's/^PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config || echo "PermitRootLogin no" >> /etc/ssh/sshd_config
-
-# Disable password-based authentication (force key-based auth)
-sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
-grep -q "^PasswordAuthentication" /etc/ssh/sshd_config && sed -i 's/^PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config || echo "PasswordAuthentication no" >> /etc/ssh/sshd_config
-
-# Restart SSH to apply changes
 systemctl restart sshd
-echo "SSH has been secured. Root login and password authentication are disabled."
-echo "WARNING: Ensure you have set up SSH keys for '$NEW_USER' before logging out!"
+echo "SSH has been secured."
+echo "  - Port changed to: $SSH_PORT"
+echo "  - Root login disabled."
+echo "  - Password authentication disabled."
 
-# --- Step 4: Configure Firewall (UFW) ---
+# --- Step 5: Configure Firewall (UFW) ---
 print_header "Configuring UFW (Uncomplicated Firewall)"
-# Install UFW if it's not already installed
 apt-get install ufw -y
-
-# Reset UFW to default settings
 ufw --force reset
-
-# Set default policies
 ufw default deny incoming
 ufw default allow outgoing
-
-# Allow essential ports
-ufw allow ssh     # Port 22 by default
-ufw allow http    # Port 80
-ufw allow https   # Port 443
-
-# Enable the firewall
+echo "Opening new SSH port $SSH_PORT in the firewall."
+ufw allow ${SSH_PORT}/tcp
+ufw allow http
+ufw allow https
 ufw --force enable
 echo "Firewall configured and enabled."
 ufw status verbose
 
-# --- Step 5: Install Fail2ban ---
+# --- Step 6: Install Fail2ban ---
 print_header "Installing Fail2ban for Brute-Force Protection"
 apt-get install fail2ban -y
-
-# Create a local jail configuration to override defaults
 JAIL_LOCAL="/etc/fail2ban/jail.local"
 if [ ! -f "$JAIL_LOCAL" ]; then
-    echo "Creating Fail2ban local configuration..."
-    cat > "$JAIL_LOCAL" << EOL
+	echo "Creating Fail2ban local configuration..."
+	cat >"$JAIL_LOCAL" <<EOL
 [DEFAULT]
 bantime = 1h
 findtime = 10m
@@ -137,28 +139,29 @@ maxretry = 5
 
 [sshd]
 enabled = true
+port = ${SSH_PORT}
 EOL
 fi
 
-# Start and enable Fail2ban service
-systemctl start fail2ban
+systemctl restart fail2ban
 systemctl enable fail2ban
-echo "Fail2ban has been installed and configured."
-systemctl status fail2ban --no-pager
+echo "Fail2ban has been installed and configured to monitor SSH on port ${SSH_PORT}."
 
 # --- Final Message ---
-print_header "Initial Server Hardening Complete!"
+print_header "Initial Server Hardening Complete! 🎉"
 echo "Summary of actions taken:"
 echo "✓ System packages updated."
-echo "✓ New sudo user '$NEW_USER' created."
+echo "✓ Primary sudo user '$NEW_USER' created."
+echo "✓ Default 'deploy' user created for application deployments."
+echo "✓ Users '$NEW_USER' and 'deploy' granted Docker access."
+echo "✓ SSH port changed to ${SSH_PORT}."
 echo "✓ SSH root login and password authentication disabled."
-echo "✓ UFW firewall enabled (allowing SSH, HTTP, HTTPS)."
+echo "✓ UFW firewall enabled (allowing SSH on port ${SSH_PORT}, HTTP, HTTPS)."
 echo "✓ Fail2ban installed to protect against SSH brute-force attacks."
 echo ""
 echo "IMPORTANT NEXT STEPS:"
-echo "1. If you haven't already, set up SSH key authentication for the user '$NEW_USER'."
-echo "2. Log out of your root session and log back in as '$NEW_USER'."
-echo "   ssh ${NEW_USER}@[your_server_ip]"
-echo "3. Regularly update your server with 'sudo apt update && sudo apt upgrade'."
-
+echo "1. Set up SSH key authentication for '$NEW_USER' and 'deploy'."
+echo "2. Log out and log back in as '$NEW_USER' using the new port:"
+echo "   ssh -p ${SSH_PORT} ${NEW_USER}@[your_server_ip]"
+echo "3. Remember to run 'sudo apt update && sudo apt upgrade' regularly."
 exit 0

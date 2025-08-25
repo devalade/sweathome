@@ -22,9 +22,9 @@
 # USAGE:
 # 1.  Run the initial hardening script first, or ensure you have a
 #     non-root sudo user and SSH key access.
-# 2.  Download this script: wget [URL] -O advanced_harden.sh
-# 3.  Make it executable: chmod +x advanced_harden.sh
-# 4.  Run with sudo: sudo ./advanced_harden.sh
+# 2.  Download this script: wget https://raw.githubusercontent.com/devalade/sweathome/main/scripts/advanced-harden
+# 3.  Make it executable: chmod +x advanced-harden
+# 4.  Run with sudo: sudo ./advanced-harden
 #
 # =================================================================
 
@@ -32,19 +32,19 @@
 
 # Function to print a section header
 print_header() {
-    echo ""
-    echo "============================================================"
-    echo "  $1"
-    echo "============================================================"
+	echo ""
+	echo "============================================================"
+	echo "  $1"
+	echo "============================================================"
 }
 
 # --- Main Script ---
 
 # 1. Check if the script is run as root
 if [[ "${EUID}" -ne 0 ]]; then
-    echo "Error: This script must be run as root."
-    echo "Please run with 'sudo'."
-    exit 1
+	echo "Error: This script must be run as root."
+	echo "Please run with 'sudo'."
+	exit 1
 fi
 
 # Run initial setup from the first script. For brevity, these are condensed.
@@ -61,8 +61,8 @@ echo "System update complete."
 print_header "Ensuring a Sudo User Exists"
 read -p "Enter the username of your primary sudo user: " SUDO_USER
 if ! id "$SUDO_USER" &>/dev/null; then
-    echo "User '$SUDO_USER' does not exist. Please create one first."
-    exit 1
+	echo "User '$SUDO_USER' does not exist. Please create one first."
+	exit 1
 fi
 echo "Continuing with user '$SUDO_USER'."
 
@@ -71,31 +71,31 @@ print_header "Advanced SSH Hardening"
 SSH_PORT=22 # Default SSH Port
 read -p "Do you want to change the default SSH port (22)? [y/N]: " CHANGE_PORT
 if [[ "$CHANGE_PORT" =~ ^[yY](es)?$ ]]; then
-    read -p "Enter a new SSH port number (1025-65535): " NEW_SSH_PORT
-    # Basic validation for the port number
-    if ! [[ "$NEW_SSH_PORT" =~ ^[0-9]+$ ]] || [ "$NEW_SSH_PORT" -lt 1025 ] || [ "$NEW_SSH_PORT" -gt 65535 ]; then
-        echo "Invalid port number. Using default port 22."
-    else
-        SSH_PORT=$NEW_SSH_PORT
-        # Create a backup
-        cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak_portchange
-        # Change the port
-        sed -i "s/^#?Port 22/Port $SSH_PORT/" /etc/ssh/sshd_config
-        echo "SSH port changed to $SSH_PORT."
-    fi
+	read -p "Enter a new SSH port number (1025-65535): " NEW_SSH_PORT
+	# Basic validation for the port number
+	if ! [[ "$NEW_SSH_PORT" =~ ^[0-9]+$ ]] || [ "$NEW_SSH_PORT" -lt 1025 ] || [ "$NEW_SSH_PORT" -gt 65535 ]; then
+		echo "Invalid port number. Using default port 22."
+	else
+		SSH_PORT=$NEW_SSH_PORT
+		# Create a backup
+		cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak_portchange
+		# Change the port
+		sed -i "s/^#?Port 22/Port $SSH_PORT/" /etc/ssh/sshd_config
+		echo "SSH port changed to $SSH_PORT."
+	fi
 fi
 # Ensure root login and password auth are disabled
 sed -i 's/^#?PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
 sed -i 's/^#?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
 # Add an AllowUsers line to be more explicit
 sed -i '/^AllowUsers/d' /etc/ssh/sshd_config # Remove existing AllowUsers line
-echo "AllowUsers $SUDO_USER" >> /etc/ssh/sshd_config
+echo "AllowUsers $SUDO_USER" >>/etc/ssh/sshd_config
 echo "SSH access is now restricted to user '$SUDO_USER'."
 
 # --- Step 4: Kernel Hardening (sysctl) ---
 print_header "Applying Kernel Hardening Settings"
 SYSCTL_CONF="/etc/sysctl.d/99-hardening.conf"
-cat > "$SYSCTL_CONF" << EOL
+cat >"$SYSCTL_CONF" <<EOL
 # IP Spoofing protection
 net.ipv4.conf.default.rp_filter=1
 net.ipv4.conf.all.rp_filter=1
@@ -152,8 +152,8 @@ print_header "Installing Fail2ban"
 apt-get install fail2ban -y
 JAIL_LOCAL="/etc/fail2ban/jail.local"
 if [ ! -f "$JAIL_LOCAL" ]; then
-    echo "Creating Fail2ban local configuration..."
-    cat > "$JAIL_LOCAL" << EOL
+	echo "Creating Fail2ban local configuration..."
+	cat >"$JAIL_LOCAL" <<EOL
 [DEFAULT]
 bantime = 1h
 findtime = 10m
