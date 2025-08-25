@@ -1,0 +1,43 @@
+#!/bin/bash
+# Start PipeWire audio stack and set Blue Yeti clean mic as default
+# Falls back to normal Yeti if echo-cancelled version is not found
+
+exit
+
+# Restart audio services
+systemctl --user restart pipewire pipewire-pulse wireplumber
+
+# Wait for devices to appear
+sleep 5
+
+# Debug: list all sources
+echo "🔍 Available sources:"
+pactl list sources short
+
+# Try to find Echo-Cancelled Blue Yeti (match any echo-cancel name)
+YETI_CLEAN=$(pactl list sources short | grep -i "echo" | awk '{print $1}')
+
+# Try to find normal Blue Yeti
+YETI_NORMAL=$(pactl list sources short | grep -i "Generic_Blue_Microphones" | awk '{print $1}')
+
+# If echo-cancelled exists, wait until it's ready
+if [ -n "$YETI_CLEAN" ]; then
+	for i in {1..5}; do
+		if pactl set-default-source "$YETI_CLEAN" 2>/dev/null; then
+			echo "✅ Blue Yeti with noise suppression set as default: $YETI_CLEAN"
+			exit 0
+		else
+			echo "⏳ Waiting for echo-cancelled source to be ready..."
+			sleep 2
+		fi
+	done
+	echo "⚠️ Echo-Cancelled Yeti found but not ready. Using normal Yeti."
+fi
+
+# Fallback to normal Yeti
+if [ -n "$YETI_NORMAL" ]; then
+	pactl set-default-source "$YETI_NORMAL"
+	echo "⚠️ Using normal Yeti: $YETI_NORMAL"
+else
+	echo "❌ No Blue Yeti found. Leaving default mic unchanged."
+fi

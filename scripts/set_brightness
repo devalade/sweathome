@@ -1,0 +1,32 @@
+#!/bin/bash
+# Script to set brightness for all connected displays (external + laptop)
+
+if [ -z "$1" ]; then
+    echo "Usage: $0 <brightness_value>"
+    echo "Example: $0 30"
+    exit 1
+fi
+
+BRIGHTNESS=$1
+
+# --- External monitors via ddcutil ---
+echo "Setting external monitor brightness to $BRIGHTNESS%..."
+# Loop through all detected DDC/CI capable displays
+ddcutil detect | grep -E "I2C bus:" | awk '{print $3}' | while read -r BUS; do
+    # Remove /dev/i2c- prefix to get bus number
+    BUS_NUM=$(echo "$BUS" | cut -d'-' -f2)
+    echo "  -> External monitor on bus $BUS_NUM"
+    ddcutil --bus=$BUS_NUM setvcp 10 $BRIGHTNESS
+done
+
+# --- Laptop screen via xrandr ---
+# Convert percentage to decimal (e.g., 30 -> 0.3)
+XRANDR_BRIGHT=$(awk "BEGIN {print $BRIGHTNESS/100}")
+echo "Setting laptop screen brightness to $XRANDR_BRIGHT..."
+# Get all connected displays from xrandr
+xrandr --verbose | grep " connected" | cut -d" " -f1 | while read -r DISP; do
+    echo "  -> Adjusting $DISP"
+    xrandr --output "$DISP" --brightness $XRANDR_BRIGHT
+done
+
+echo "✅ Brightness set to $BRIGHTNESS% for all screens."

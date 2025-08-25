@@ -1,0 +1,10 @@
+[Unit]
+Description=Start Blue Yeti with Noise Suppression
+After=pipewire.service pipewire-pulse.service wireplumber.service
+
+[Service]
+ExecStart=/home/devalade/Code/sweathome/scripts/systemd/start-clean-yeti.sh
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
